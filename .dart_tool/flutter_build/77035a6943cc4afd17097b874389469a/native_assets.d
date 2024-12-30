@@ -1,0 +1,1 @@
+ D:\\kuliah\\semester\ 7\\Capstone\ Project\\scanner_app\\.dart_tool\\flutter_build\\77035a6943cc4afd17097b874389469a\\native_assets.yaml: 
