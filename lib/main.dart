@@ -13,7 +13,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Scanner App',
+      title: 'Presensi Scanner',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
@@ -31,70 +31,111 @@ class ScannerPage extends StatefulWidget {
 }
 
 class _ScannerPageState extends State<ScannerPage> {
-  bool _isProcessing = false; // Menandakan jika sedang memproses data
-  bool _hasScanned = false; // Menandakan jika QR sudah dipindai
+  bool _isProcessing = false;
+  bool _hasScanned = false;
 
   Future<void> _sendData(String qrData) async {
-    if (_isProcessing || _hasScanned) {
-      // Jika sedang memproses atau sudah pernah dipindai, tidak akan mengirim data lagi
-      return;
-    }
+    // Prevent multiple simultaneous scans
+    if (_isProcessing || _hasScanned) return;
 
     setState(() {
       _isProcessing = true;
-      _hasScanned = true; // Menandakan bahwa data sudah dipindai
+      _hasScanned = true;
     });
 
     try {
-      // Pisahkan data QR Code
-      final List<String> data = qrData.split('|');
-      if (data.length < 2) {
-        _showErrorDialog('QR Code tidak valid');
-        return;
+      // Remove leading pipe if exists
+      final String cleanQrData =
+          qrData.startsWith('|') ? qrData.substring(1) : qrData;
+
+      // Split the QR data
+      final List<String> dataParts = cleanQrData.split('|');
+
+      // Debug: Print total number of parts and all parts
+      debugPrint('Total bagian QR Data: ${dataParts.length}');
+      debugPrint('Semua bagian QR Data: $dataParts');
+
+      // Validate QR code format
+      if (dataParts.length < 20) {
+        // Pastikan ada minimal 20 bagian
+        throw Exception('Format QR code tidak valid');
       }
 
-      final String nama = data[1]; // Nama Lengkap
-      final String id = data[0].split(',')[0]; // ID
+      final String id = dataParts[0].trim(); // S0001
+      final String nama = dataParts[1].trim(); // Bambii
+      final String statusPembayaran =
+          dataParts[19].trim(); // Status pembayaran (index 19)
 
-      // Buat body data dalam format JSON
-      final Map<String, String> requestBody = {
-        'nama': nama,
+      // Determine if it's a teacher or student
+      final bool isGuru = id.startsWith('G');
+
+      // Prepare request body
+      Map<String, dynamic> requestBody = {
+        'mode': isGuru ? 'presensiGuru' : 'presensiSiswa',
         'id': id,
+        'namaLengkap': nama,
+        if (!isGuru) 'statusPembayaran': statusPembayaran,
       };
 
-      // URL Google Apps Script untuk menerima POST request
-      final Uri uri = Uri.parse(
-          'https://script.google.com/macros/s/AKfycbxTxIMQWYJrxC_q_Xg8MiwQyug5O3Jw0qcFAwntamPSSasTVtwVSSBs3DV5XMHnYVhz/exec');
+      // Debug print
+      debugPrint('Sending request: ${jsonEncode(requestBody)}');
 
-      // Kirim data ke server menggunakan POST request
+      // Send request to Google Apps Script
       final response = await http.post(
-        uri,
+        Uri.parse(
+            'https://script.google.com/macros/s/AKfycbxQ30OJ77ZbzVFziAaUNofRuZYy-FVK6LCAzELBwS28rJg__nKHOu9ni52HrqAUW72f/exec'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(requestBody),
       );
 
-      print('Response status: ${response.statusCode}');
-      print('Response body: ${response.body}');
+      // Debug print response
+      debugPrint('Response status: ${response.statusCode}');
+      debugPrint('Response body: ${response.body}');
 
-      // Tangani response dari server, tanpa menampilkan pesan error
-      if (response.statusCode == 200) {
-        // Menampilkan data yang dipindai di pop-up
-        _showSuccessDialog(
-            'Data berhasil dikirim untuk:\nNama: $nama\nID: $id');
-      } else {
-        // Cek apakah 302 terjadi, tapi jangan tampilkan pesan error
-        if (response.statusCode == 302) {
-          print('Pengalihan terjadi, tapi data tetap berhasil dikirim.');
+      // Check for redirect
+      if (response.statusCode == 302) {
+        final String? redirectUrl = response.headers['location'];
+        if (redirectUrl != null) {
+          final redirectResponse = await http.get(Uri.parse(redirectUrl));
+
+          debugPrint(
+              'Redirect response status: ${redirectResponse.statusCode}');
+          debugPrint('Redirect response body: ${redirectResponse.body}');
+
+          // Parse the response
+          final responseData = jsonDecode(redirectResponse.body);
+
+          // Check response status
+          if (responseData['status'] == 'success') {
+            // Prepare display message
+            String message = isGuru
+                ? 'Data Guru:\nKode: $id\nNama: $nama'
+                : 'Data Siswa:\nKode: $id\nNama: $nama\nStatus Pembayaran: $statusPembayaran';
+
+            // Add additional details from response
+            if (responseData['data'] != null) {
+              message +=
+                  '\n\nKode Presensi: ${responseData['data']['kodePresensi']}';
+              message += '\nWaktu: ${responseData['data']['timestamp']}';
+            }
+
+            // Show success dialog
+            _showSuccessDialog(message);
+          } else {
+            // Throw error if server returns error status
+            throw Exception(responseData['message'] ?? 'Gagal memproses data');
+          }
         }
-        // Data tetap berhasil dikirim, hanya menampilkan data QR Code
-        _showSuccessDialog('QR Code ditemukan: $qrData');
+      } else {
+        throw Exception('Gagal mengirim data ke server');
       }
     } catch (e) {
-      print('Error: $e');
-      _showErrorDialog('Error: $e');
+      // Show error dialog
+      _showErrorDialog(e.toString().replaceAll('Exception: ', ''));
     } finally {
+      // Reset processing state
       setState(() {
-        _isProcessing = false; // Menandakan bahwa proses telah selesai
+        _isProcessing = false;
       });
     }
   }
@@ -103,13 +144,13 @@ class _ScannerPageState extends State<ScannerPage> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Data Ditemukan'),
+        title: const Text('Presensi Berhasil'),
         content: Text(message),
         actions: [
           TextButton(
             onPressed: () {
               setState(() {
-                _hasScanned = false; // Resetkan status pemindaian
+                _hasScanned = false; // Reset scan status
               });
               Navigator.pop(context);
             },
@@ -130,7 +171,7 @@ class _ScannerPageState extends State<ScannerPage> {
           TextButton(
             onPressed: () {
               setState(() {
-                _hasScanned = false; // Resetkan status pemindaian
+                _hasScanned = false; // Reset scan status
               });
               Navigator.pop(context);
             },
@@ -145,7 +186,7 @@ class _ScannerPageState extends State<ScannerPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Scanner'),
+        title: const Text('Presensi Scanner'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
       body: Center(
@@ -161,7 +202,7 @@ class _ScannerPageState extends State<ScannerPage> {
                   for (final barcode in barcodes) {
                     if (barcode.rawValue != null) {
                       debugPrint('Barcode found! ${barcode.rawValue}');
-                      // Kirim data ke server dan tampilkan pop-up setelah pemindaian
+                      // Send data to server and show popup after scanning
                       _sendData(barcode.rawValue!);
                     }
                   }
@@ -169,7 +210,7 @@ class _ScannerPageState extends State<ScannerPage> {
               ),
             ),
             if (_isProcessing)
-              const CircularProgressIndicator(), // Menampilkan indikator proses
+              const CircularProgressIndicator(), // Show processing indicator
             const SizedBox(height: 20),
             const Text(
               'Arahkan kamera ke Barcode atau QR Code',
