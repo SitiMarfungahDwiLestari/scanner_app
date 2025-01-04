@@ -120,7 +120,11 @@ class _ScannerPageState extends State<ScannerPage> {
             }
 
             // Show success dialog
-            _showSuccessDialog(message);
+            if (!isGuru && statusPembayaran.toLowerCase() == 'belum lunas') {
+              _showErrorDialog(message);
+            } else {
+              _showSuccessDialog(message);
+            }
           } else {
             // Throw error if server returns error status
             throw Exception(responseData['message'] ?? 'Gagal memproses data');
@@ -165,8 +169,10 @@ class _ScannerPageState extends State<ScannerPage> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Error'),
+        title: const Text('Pembayaran Belum Lunas'),
         content: Text(message),
+        backgroundColor: Colors.red,
+        contentTextStyle: const TextStyle(color: Colors.white),
         actions: [
           TextButton(
             onPressed: () {
