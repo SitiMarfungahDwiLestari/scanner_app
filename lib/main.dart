@@ -35,7 +35,6 @@ class _ScannerPageState extends State<ScannerPage> {
   bool _hasScanned = false;
 
   Future<void> _sendData(String qrData) async {
-    // Prevent multiple simultaneous scans
     if (_isProcessing || _hasScanned) return;
 
     setState(() {
@@ -44,32 +43,37 @@ class _ScannerPageState extends State<ScannerPage> {
     });
 
     try {
-      // Remove leading pipe if exists
       final String cleanQrData =
           qrData.startsWith('|') ? qrData.substring(1) : qrData;
 
-      // Split the QR data
       final List<String> dataParts = cleanQrData.split('|');
-
-      // Debug: Print total number of parts and all parts
+      
       debugPrint('Total bagian QR Data: ${dataParts.length}');
       debugPrint('Semua bagian QR Data: $dataParts');
 
-      // Validate QR code format
-      if (dataParts.length < 20) {
-        // Pastikan ada minimal 20 bagian
-        throw Exception('Format QR code tidak valid');
+      // Get the ID first to determine if it's a teacher or student
+      if (dataParts.isEmpty) {
+        throw Exception('QR code kosong');
       }
 
-      final String id = dataParts[0].trim(); // S0001
-      final String nama = dataParts[1].trim(); // Bambii
-      final String statusPembayaran =
-          dataParts[19].trim(); // Status pembayaran (index 19)
-
-      // Determine if it's a teacher or student
+      final String id = dataParts[0].trim();
       final bool isGuru = id.startsWith('G');
 
-      // Prepare request body
+      // Different validation for teacher and student
+      if (isGuru) {
+        if (dataParts.length < 7) { // Minimal perlu ID dan nama
+          throw Exception('Format QR code guru tidak valid');
+        }
+      } else {
+        if (dataParts.length < 20) { // Untuk siswa tetap perlu 20 data
+          throw Exception('Format QR code siswa tidak valid');
+        }
+      }
+
+      final String nama = dataParts[1].trim();
+      // Status pembayaran hanya untuk siswa
+      final String statusPembayaran = !isGuru ? dataParts[19].trim() : '';
+
       Map<String, dynamic> requestBody = {
         'mode': isGuru ? 'presensiGuru' : 'presensiSiswa',
         'id': id,
@@ -77,10 +81,8 @@ class _ScannerPageState extends State<ScannerPage> {
         if (!isGuru) 'statusPembayaran': statusPembayaran,
       };
 
-      // Debug print
       debugPrint('Sending request: ${jsonEncode(requestBody)}');
 
-      // Send request to Google Apps Script
       final response = await http.post(
         Uri.parse(
             'https://script.google.com/macros/s/AKfycbxQ30OJ77ZbzVFziAaUNofRuZYy-FVK6LCAzELBwS28rJg__nKHOu9ni52HrqAUW72f/exec'),
@@ -88,11 +90,9 @@ class _ScannerPageState extends State<ScannerPage> {
         body: jsonEncode(requestBody),
       );
 
-      // Debug print response
       debugPrint('Response status: ${response.statusCode}');
       debugPrint('Response body: ${response.body}');
 
-      // Check for redirect
       if (response.statusCode == 302) {
         final String? redirectUrl = response.headers['location'];
         if (redirectUrl != null) {
@@ -102,31 +102,28 @@ class _ScannerPageState extends State<ScannerPage> {
               'Redirect response status: ${redirectResponse.statusCode}');
           debugPrint('Redirect response body: ${redirectResponse.body}');
 
-          // Parse the response
           final responseData = jsonDecode(redirectResponse.body);
 
-          // Check response status
           if (responseData['status'] == 'success') {
-            // Prepare display message
-            String message = isGuru
-                ? 'Data Guru:\nKode: $id\nNama: $nama'
-                : 'Data Siswa:\nKode: $id\nNama: $nama\nStatus Pembayaran: $statusPembayaran';
+            String message;
+            if (isGuru) {
+              message = 'Data Guru:\nKode: $id\nNama: $nama';
+            } else {
+              message = 'Data Siswa:\nKode: $id\nNama: $nama\nStatus Pembayaran: $statusPembayaran';
+            }
 
-            // Add additional details from response
             if (responseData['data'] != null) {
-              message +=
-                  '\n\nKode Presensi: ${responseData['data']['kodePresensi']}';
+              message += '\n\nKode Presensi: ${responseData['data']['kodePresensi']}';
               message += '\nWaktu: ${responseData['data']['timestamp']}';
             }
 
-            // Show success dialog
+            // Only show red dialog for students with "belum lunas" status
             if (!isGuru && statusPembayaran.toLowerCase() == 'belum lunas') {
               _showErrorDialog(message);
             } else {
               _showSuccessDialog(message);
             }
           } else {
-            // Throw error if server returns error status
             throw Exception(responseData['message'] ?? 'Gagal memproses data');
           }
         }
@@ -134,10 +131,8 @@ class _ScannerPageState extends State<ScannerPage> {
         throw Exception('Gagal mengirim data ke server');
       }
     } catch (e) {
-      // Show error dialog
       _showErrorDialog(e.toString().replaceAll('Exception: ', ''));
     } finally {
-      // Reset processing state
       setState(() {
         _isProcessing = false;
       });
@@ -154,7 +149,7 @@ class _ScannerPageState extends State<ScannerPage> {
           TextButton(
             onPressed: () {
               setState(() {
-                _hasScanned = false; // Reset scan status
+                _hasScanned = false;
               });
               Navigator.pop(context);
             },
@@ -177,11 +172,11 @@ class _ScannerPageState extends State<ScannerPage> {
           TextButton(
             onPressed: () {
               setState(() {
-                _hasScanned = false; // Reset scan status
+                _hasScanned = false;
               });
               Navigator.pop(context);
             },
-            child: const Text('OK'),
+            child: const Text('OK', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -208,15 +203,13 @@ class _ScannerPageState extends State<ScannerPage> {
                   for (final barcode in barcodes) {
                     if (barcode.rawValue != null) {
                       debugPrint('Barcode found! ${barcode.rawValue}');
-                      // Send data to server and show popup after scanning
                       _sendData(barcode.rawValue!);
                     }
                   }
                 },
               ),
             ),
-            if (_isProcessing)
-              const CircularProgressIndicator(), // Show processing indicator
+            if (_isProcessing) const CircularProgressIndicator(),
             const SizedBox(height: 20),
             const Text(
               'Arahkan kamera ke Barcode atau QR Code',
