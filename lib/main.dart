@@ -43,31 +43,47 @@ class _ScannerPageState extends State<ScannerPage> {
     });
 
     try {
+      // Bersihkan data QR jika dimulai dengan karakter '|'
       final String cleanQrData =
           qrData.startsWith('|') ? qrData.substring(1) : qrData;
 
       final List<String> dataParts = cleanQrData.split('|');
-      
+
       debugPrint('Total bagian QR Data: ${dataParts.length}');
       debugPrint('Semua bagian QR Data: $dataParts');
 
-      // Get the ID first to determine if it's a teacher or student
+      // Cek apakah data kosong
       if (dataParts.isEmpty) {
         throw Exception('QR code kosong');
       }
 
       final String id = dataParts[0].trim();
-      final bool isGuru = id.startsWith('G');
 
-      // Different validation for teacher and student
+      // Deteksi tipe pengguna dari kode ID
+      final bool isGuru = id.startsWith('G');
+      debugPrint('Tipe pengguna: ${isGuru ? 'Guru' : 'Siswa'}');
+
+      // Validasi format data berbeda untuk guru dan siswa
       if (isGuru) {
-        if (dataParts.length < 7) { // Minimal perlu ID dan nama
-          throw Exception('Format QR code guru tidak valid');
+        // Validasi khusus untuk guru
+        if (dataParts.length < 7) {
+          throw Exception(
+              'Format QR code guru tidak valid (minimal butuh 7 data)');
         }
       } else {
-        if (dataParts.length < 20) { // Untuk siswa tetap perlu 20 data
-          throw Exception('Format QR code siswa tidak valid');
+        // Validasi khusus untuk siswa - sesuaikan dengan jumlah data yang sebenarnya di QR
+        if (dataParts.length < 20) {
+          // Ubah sesuai jumlah kolom yang di-encode dalam QR
+          throw Exception(
+              'Format QR code siswa tidak valid (butuh ${dataParts.length} dari 22 data yang diperlukan)');
         }
+      }
+
+      // Pastikan validasi tipe data sesuai
+      if (isGuru && !id.startsWith('G')) {
+        throw Exception('Kode guru harus dimulai dengan G');
+      } else if (!isGuru && !id.startsWith('S')) {
+        throw Exception('Kode siswa harus dimulai dengan S');
       }
 
       final String nama = dataParts[1].trim();
@@ -85,7 +101,7 @@ class _ScannerPageState extends State<ScannerPage> {
 
       final response = await http.post(
         Uri.parse(
-            'https://script.google.com/macros/s/AKfycbxQ30OJ77ZbzVFziAaUNofRuZYy-FVK6LCAzELBwS28rJg__nKHOu9ni52HrqAUW72f/exec'),
+            'https://script.google.com/macros/s/AKfycbw7-CU81sLz-w4kto0IOvdFjXsCC4yDhpcz4_XH8rveg_6h9mGk4QHRmnQ0hW8y4BeC/exec'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(requestBody),
       );
@@ -106,32 +122,44 @@ class _ScannerPageState extends State<ScannerPage> {
 
           if (responseData['status'] == 'success') {
             String message;
+            // Buat format pesan yang sesuai berdasarkan tipe pengguna
             if (isGuru) {
-              message = 'Data Guru:\nKode: $id\nNama: $nama';
+              message = '''
+Data Guru:
+Waktu: ${responseData['data']['timestamp']}
+Kode Presensi: ${responseData['data']['kodePresensi']}
+Kode Guru: ${responseData['data']['kodeGuru']}
+Nama: ${responseData['data']['nama']}
+Kehadiran: ${responseData['data']['kehadiran']}
+''';
             } else {
-              message = 'Data Siswa:\nKode: $id\nNama: $nama\nStatus Pembayaran: $statusPembayaran';
+              message = '''
+Data Siswa:
+Waktu: ${responseData['data']['timestamp']}
+Kode Presensi: ${responseData['data']['kodePresensi']}
+Kode Siswa: ${responseData['data']['kodeSiswa']}
+Nama: ${responseData['data']['nama']}
+Status Pembayaran: ${responseData['data']['statusPembayaran']}
+Kehadiran: ${responseData['data']['kehadiran']}
+''';
             }
 
-            if (responseData['data'] != null) {
-              message += '\n\nKode Presensi: ${responseData['data']['kodePresensi']}';
-              message += '\nWaktu: ${responseData['data']['timestamp']}';
-            }
-
-            // Only show red dialog for students with "belum lunas" status
+            // Tampilkan dialog merah hanya untuk siswa yang belum lunas
             if (!isGuru && statusPembayaran.toLowerCase() == 'belum lunas') {
-              _showErrorDialog(message);
+              _showPembayaranDialog(message);
             } else {
               _showSuccessDialog(message);
             }
           } else {
-            throw Exception(responseData['message'] ?? 'Gagal memproses data');
+            _showGeneralErrorDialog(
+                responseData['message'] ?? 'Gagal memproses data');
           }
         }
       } else {
         throw Exception('Gagal mengirim data ke server');
       }
     } catch (e) {
-      _showErrorDialog(e.toString().replaceAll('Exception: ', ''));
+      _showGeneralErrorDialog(e.toString().replaceAll('Exception: ', ''));
     } finally {
       setState(() {
         _isProcessing = false;
@@ -139,6 +167,7 @@ class _ScannerPageState extends State<ScannerPage> {
     }
   }
 
+  // Dialog untuk presensi berhasil (warna normal)
   void _showSuccessDialog(String message) {
     showDialog(
       context: context,
@@ -160,13 +189,19 @@ class _ScannerPageState extends State<ScannerPage> {
     );
   }
 
-  void _showErrorDialog(String message) {
+  // Dialog khusus untuk siswa yang belum lunas (warna merah)
+  void _showPembayaranDialog(String message) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Pembayaran Belum Lunas'),
         content: Text(message),
         backgroundColor: Colors.red,
+        titleTextStyle: const TextStyle(
+          color: Colors.white,
+          fontSize: 20,
+          fontWeight: FontWeight.bold,
+        ),
         contentTextStyle: const TextStyle(color: Colors.white),
         actions: [
           TextButton(
@@ -176,7 +211,32 @@ class _ScannerPageState extends State<ScannerPage> {
               });
               Navigator.pop(context);
             },
-            child: const Text('OK', style: TextStyle(color: Colors.white)),
+            child: const Text(
+              'OK',
+              style: TextStyle(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Dialog untuk error umum (warna normal)
+  void _showGeneralErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Error'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () {
+              setState(() {
+                _hasScanned = false;
+              });
+              Navigator.pop(context);
+            },
+            child: const Text('OK'),
           ),
         ],
       ),
