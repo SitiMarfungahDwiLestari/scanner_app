@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'qr_validator.dart';
 
 void main() {
   runApp(const MyApp());
@@ -43,65 +44,35 @@ class _ScannerPageState extends State<ScannerPage> {
     });
 
     try {
-      // Bersihkan data QR jika dimulai dengan karakter '|'
-      final String cleanQrData =
-          qrData.startsWith('|') ? qrData.substring(1) : qrData;
-
-      final List<String> dataParts = cleanQrData.split('|');
-
-      debugPrint('Total bagian QR Data: ${dataParts.length}');
-      debugPrint('Semua bagian QR Data: $dataParts');
-
+      QRValidator.validateQrCode(qrData);
       // Cek apakah data kosong
-      if (dataParts.isEmpty) {
+      if (qrData.isEmpty) {
         throw Exception('QR code kosong');
       }
 
-      final String id = dataParts[0].trim();
+      final String id = qrData.trim();
 
       // Deteksi tipe pengguna dari kode ID
       final bool isGuru = id.startsWith('G');
       debugPrint('Tipe pengguna: ${isGuru ? 'Guru' : 'Siswa'}');
 
-      // Validasi format data berbeda untuk guru dan siswa
-      if (isGuru) {
-        // Validasi khusus untuk guru
-        if (dataParts.length < 7) {
-          throw Exception(
-              'Format QR code guru tidak valid (minimal butuh 7 data)');
-        }
-      } else {
-        // Validasi khusus untuk siswa - sesuaikan dengan jumlah data yang sebenarnya di QR
-        if (dataParts.length < 20) {
-          // Ubah sesuai jumlah kolom yang di-encode dalam QR
-          throw Exception(
-              'Format QR code siswa tidak valid (butuh ${dataParts.length} dari 22 data yang diperlukan)');
-        }
-      }
-
-      // Pastikan validasi tipe data sesuai
+      // Validasi format kode
       if (isGuru && !id.startsWith('G')) {
         throw Exception('Kode guru harus dimulai dengan G');
       } else if (!isGuru && !id.startsWith('S')) {
         throw Exception('Kode siswa harus dimulai dengan S');
       }
 
-      final String nama = dataParts[1].trim();
-      // Status pembayaran hanya untuk siswa
-      final String statusPembayaran = !isGuru ? dataParts[19].trim() : '';
-
       Map<String, dynamic> requestBody = {
         'mode': isGuru ? 'presensiGuru' : 'presensiSiswa',
         'id': id,
-        'namaLengkap': nama,
-        if (!isGuru) 'statusPembayaran': statusPembayaran,
       };
 
       debugPrint('Sending request: ${jsonEncode(requestBody)}');
 
       final response = await http.post(
         Uri.parse(
-            'https://script.google.com/macros/s/AKfycbw7-CU81sLz-w4kto0IOvdFjXsCC4yDhpcz4_XH8rveg_6h9mGk4QHRmnQ0hW8y4BeC/exec'),
+            'https://script.google.com/macros/s/AKfycbyoMUoVtkDVMXZ2rMug-iREQvVP9WDafp_JPoCxyIY4zI9p4afBNf9kvCFibewy-PUm/exec'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(requestBody),
       );
@@ -122,7 +93,7 @@ class _ScannerPageState extends State<ScannerPage> {
 
           if (responseData['status'] == 'success') {
             String message;
-            // Buat format pesan yang sesuai berdasarkan tipe pengguna
+            // Data yang dikembalikan dari server sudah lengkap
             if (isGuru) {
               message = '''
 Data Guru:
@@ -142,14 +113,17 @@ Nama: ${responseData['data']['nama']}
 Status Pembayaran: ${responseData['data']['statusPembayaran']}
 Kehadiran: ${responseData['data']['kehadiran']}
 ''';
-            }
 
-            // Tampilkan dialog merah hanya untuk siswa yang belum lunas
-            if (!isGuru && statusPembayaran.toLowerCase() == 'belum lunas') {
-              _showPembayaranDialog(message);
-            } else {
-              _showSuccessDialog(message);
+              // Cek status pembayaran dari response server
+              if (responseData['data']['statusPembayaran']
+                      ?.toString()
+                      .toLowerCase() ==
+                  'belum lunas') {
+                _showPembayaranDialog(message);
+                return;
+              }
             }
+            _showSuccessDialog(message);
           } else {
             _showGeneralErrorDialog(
                 responseData['message'] ?? 'Gagal memproses data');
@@ -241,6 +215,17 @@ Kehadiran: ${responseData['data']['kehadiran']}
         ],
       ),
     );
+  }
+
+  // Di dalam class _ScannerPageState
+  void validateQrCode(String qrData) {
+    if (qrData.isEmpty) {
+      throw Exception('QR code kosong');
+    }
+
+    if (!qrData.startsWith('G') && !qrData.startsWith('S')) {
+      throw Exception('Format kode tidak valid');
+    }
   }
 
   @override
